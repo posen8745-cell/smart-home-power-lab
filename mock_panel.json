@@ -1,35 +1,158 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "1.1",
   "source": "SIMULATED_DATA_ONLY",
-  "description": "高中自主學習虛構家庭配電箱；不是真實電表、電箱、感測器或台電資料。",
+  "description": "高中電機自主學習｜虛構配電箱與示範分路。區域名稱可自訂，並非真實住宅配電圖。",
   "panel": {
     "id": "DB-DEMO-001",
     "name": "住宅用電模擬配電箱",
     "voltageV": 110,
     "powerFactorAssumed": 1,
-    "mainBreaker": {"id": "MAIN", "ratingA": 30},
+    "mainBreaker": {
+      "id": "MAIN",
+      "ratingA": 30
+    },
     "branches": [
-      {"id": "A", "name": "高功率家電", "ratingA": 15, "detail": "電鍋、吹風機"},
-      {"id": "B", "name": "照明與風扇", "ratingA": 10, "detail": "LED照明、電風扇"},
-      {"id": "C", "name": "資訊與除濕", "ratingA": 15, "detail": "電腦、除濕機"}
+      {
+        "id": "A",
+        "name": "高功率家電",
+        "ratingA": 15,
+        "detail": "電鍋、吹風機",
+        "areaLabel": "高功率設備區（示範）"
+      },
+      {
+        "id": "B",
+        "name": "照明與風扇",
+        "ratingA": 10,
+        "detail": "LED照明、電風扇",
+        "areaLabel": "客廳照明區（示範）"
+      },
+      {
+        "id": "C",
+        "name": "資訊與除濕",
+        "ratingA": 15,
+        "detail": "電腦、除濕機",
+        "areaLabel": "書房除濕區（示範）"
+      }
     ]
   },
   "devices": [
-    {"id": "light", "name": "LED照明", "symbol": "💡", "watts": 12, "priority": 1, "on": true, "branchId": "B"},
-    {"id": "fan", "name": "電風扇", "symbol": "🌀", "watts": 55, "priority": 2, "on": true, "branchId": "B"},
-    {"id": "computer", "name": "桌上型電腦", "symbol": "💻", "watts": 150, "priority": 2, "on": true, "branchId": "C"},
-    {"id": "dehum", "name": "除濕機", "symbol": "💧", "watts": 290, "priority": 3, "on": true, "branchId": "C"},
-    {"id": "cooker", "name": "電鍋", "symbol": "🍚", "watts": 700, "priority": 2, "on": false, "branchId": "A"},
-    {"id": "dryer", "name": "吹風機", "symbol": "♨️", "watts": 1200, "priority": 3, "on": false, "branchId": "A"}
+    {
+      "id": "light",
+      "name": "LED照明",
+      "symbol": "💡",
+      "watts": 12,
+      "priority": 1,
+      "on": true,
+      "branchId": "B"
+    },
+    {
+      "id": "fan",
+      "name": "電風扇",
+      "symbol": "🌀",
+      "watts": 55,
+      "priority": 2,
+      "on": true,
+      "branchId": "B"
+    },
+    {
+      "id": "computer",
+      "name": "桌上型電腦",
+      "symbol": "💻",
+      "watts": 150,
+      "priority": 2,
+      "on": true,
+      "branchId": "C"
+    },
+    {
+      "id": "dehum",
+      "name": "除濕機",
+      "symbol": "💧",
+      "watts": 290,
+      "priority": 3,
+      "on": true,
+      "branchId": "C"
+    },
+    {
+      "id": "cooker",
+      "name": "電鍋",
+      "symbol": "🍚",
+      "watts": 700,
+      "priority": 2,
+      "on": false,
+      "branchId": "A"
+    },
+    {
+      "id": "dryer",
+      "name": "吹風機",
+      "symbol": "♨️",
+      "watts": 1200,
+      "priority": 3,
+      "on": false,
+      "branchId": "A"
+    }
   ],
   "scenarios": [
-    {"id": "normal", "name": "一般用電（預設）", "smart": false, "enabled": ["light", "fan", "computer", "dehum"]},
-    {"id": "overload", "name": "實驗 A｜分路 A 過載", "smart": false, "enabled": ["cooker", "dryer"]},
-    {"id": "smart", "name": "實驗 B｜自動管理負載", "smart": true, "enabled": ["cooker", "dryer"]},
-    {"id": "mixed", "name": "跨分路同時用電", "smart": true, "enabled": ["light", "fan", "computer", "dehum", "cooker", "dryer"]}
+    {
+      "id": "normal",
+      "name": "一般用電（預設）",
+      "smart": false,
+      "enabled": [
+        "light",
+        "fan",
+        "computer",
+        "dehum"
+      ]
+    },
+    {
+      "id": "overload",
+      "name": "實驗 A｜分路 A 過載",
+      "smart": false,
+      "enabled": [
+        "cooker",
+        "dryer"
+      ]
+    },
+    {
+      "id": "smart",
+      "name": "實驗 B｜自動管理負載",
+      "smart": true,
+      "enabled": [
+        "cooker",
+        "dryer"
+      ]
+    },
+    {
+      "id": "mixed",
+      "name": "跨分路同時用電",
+      "smart": true,
+      "enabled": [
+        "light",
+        "fan",
+        "computer",
+        "dehum",
+        "cooker",
+        "dryer"
+      ]
+    }
   ],
   "sampleReadings": [
-    {"scenario": "overload", "branchId": "A", "sampleVoltageV": 110, "requestedPowerW": 1900, "computedCurrentA": 17.27, "branchLimitA": 15, "expectedState": "SIMULATED_TRIP"},
-    {"scenario": "smart", "branchId": "A", "sampleVoltageV": 110, "requestedPowerW": 1900, "suppliedPowerW": 700, "computedSuppliedCurrentA": 6.36, "expectedState": "LOAD_SHED"}
+    {
+      "scenario": "overload",
+      "branchId": "A",
+      "sampleVoltageV": 110,
+      "requestedPowerW": 1900,
+      "computedCurrentA": 17.27,
+      "branchLimitA": 15,
+      "expectedState": "SIMULATED_TRIP"
+    },
+    {
+      "scenario": "smart",
+      "branchId": "A",
+      "sampleVoltageV": 110,
+      "requestedPowerW": 1900,
+      "suppliedPowerW": 700,
+      "computedSuppliedCurrentA": 6.36,
+      "expectedState": "LOAD_SHED"
+    }
   ]
 }

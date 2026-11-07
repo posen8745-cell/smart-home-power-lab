@@ -1,0 +1,9 @@
+{
+  "timestamp": "2026-11-07T00:00:00+00:00",
+  "source": "EXAMPLE_NOT_A_REAL_METER",
+  "zones": {
+    "A": 920,
+    "B": 210,
+    "C": 480
+  }
+}
