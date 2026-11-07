@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>用電分區監測｜PowerLab Wi-Fi 原型</title>
+<title>用電分區監測｜PowerLab Wi-Fi v4 原型</title>
 <meta name="description" content="高中電機自主學習：虛構配電箱分路用電、手機 Wi-Fi 瀏覽、錯峰使用建議。未連接實際電箱。">
 <style>
 :root{color-scheme:dark;--bg:#0b1422;--paper:#15243a;--paper2:#1a2b42;--line:#334761;--ink:#f4f7fd;--muted:#aabbd2;--mint:#6ce6bb;--amber:#ffd28a;--red:#ff9191}
@@ -12,56 +12,137 @@
 </head>
 <body>
 <header>
-  <div class="topline"><div><div class="eyebrow">PowerLab · Wi-Fi / Mobile</div><h1>家庭分區用電監測</h1><p>找出目前用電最高的示範分路，觀察超限情境並安排錯峰使用。</p></div><div class="pill" id="sourceBadge" role="status">正在確認資料來源…</div></div>
+  <div class="topline"><div><div class="eyebrow">PowerLab · Wi-Fi / Mobile</div><h1>家庭分路用電監測</h1><p>辨認哪條迴路負載偏高，再安排錯峰使用。分路不一定等於房間，所有原型數值僅供教學。</p></div><div class="pill" id="sourceBadge" role="status">正在確認資料來源…</div></div>
   <p class="notice"><strong>安全聲明：</strong>本網頁預設為 <strong>JSON 虛構資料</strong>；接入外部 JSON 時也不代表已驗證量測。所有門檻是教學示範，沒有控制真實電箱、沒有防觸電或斷路保護功能。</p>
 </header>
 <main>
   <section class="card" aria-label="連線與示範控制">
     <h2>手機 Wi-Fi 查看</h2>
-    <p class="small">將電腦和手機連到同一個可信任的 Wi-Fi，在電腦執行 <code>python3 gateway.py</code>，手機開啟終端機顯示的區域網網址，再輸入示範碼。只在 GitHub Pages 開啟時，使用離線 JSON 展示，不會連上家中的電箱。</p>
-    <div class="controls"><label class="field">6 位示範碼<input id="pin" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" placeholder="本機終端機顯示"></label><button id="connect">連線 / 重新整理</button><label class="field">模擬情境<select id="scenario"><option value="normal">一般用電</option><option value="overload">高功率同時使用</option><option value="smart">錯峰後的狀態</option><option value="mixed">跨區用電需求</option></select></label></div>
+    <p class="small">將電腦和手機連到同一個可信任的 Wi-Fi，在電腦執行 <code>python3 gateway.py</code>，手機開啟終端機顯示的區域網網址，再輸入示範碼。在 GitHub Pages 只能使用公開 JSON 離線示範，不能從雲端網站直接假設可以讀取家中電箱。</p>
+    <div class="controls"><label class="field">6 位示範碼<input id="pin" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" placeholder="本機終端機顯示"></label><button id="connect">連線 / 重新整理</button><button id="demo" type="button" style="background:#24354b">切換離線 JSON 示範</button><label class="field">模擬情境<select id="scenario"><option value="normal">一般用電</option><option value="overload">高功率同時使用</option><option value="smart">錯峰後的狀態</option><option value="mixed">跨區用電需求</option></select></label></div>
     <div id="statusline" class="statusline" aria-live="polite">資料載入中…</div>
   </section>
   <section class="grid" style="margin-top:16px" aria-label="用電總覽">
     <div class="stat"><div class="label">目前總用電</div><div class="value"><span id="totalW">—</span><span class="unit">W</span></div><small>示範功率合計；非電力公司帳單</small></div>
     <div class="stat"><div class="label">最高用電區</div><div class="value" id="topZone">—</div><small id="topZoneDetail">分路資料待載入</small></div>
-    <div class="stat"><div class="label">需留意的區域</div><div class="value" id="alerts">—</div><small>以各分路自訂門檻計算</small></div>
+    <div class="stat"><div class="label">負載偏高分路</div><div class="value" id="alerts">—</div><small>80% 為虛構展示門檻</small></div><div class="stat"><div class="label">本次會話推估度數</div><div class="value"><span id="energy">—</span><span class="unit">kWh</span></div><small id="energyNote">僅累積有效連線樣本，不是每日或每月帳單</small></div>
   </section>
   <div class="panel-row">
-    <section class="card"><h2>分路／區域用電排名</h2><p class="small">示範區名對應虛構分路。真實住宅需要由專業人員確認各迴路實際供電範圍，無法單靠總表辨認房間。</p><div id="zones" aria-live="polite"></div></section>
-    <section class="card"><h2>錯峰使用建議</h2><p class="small">只提供資訊和使用時段建議，不會遙控家電或斷路器。</p><div id="tips"></div><hr style="border:0;border-top:1px solid var(--line);margin:18px 0"><h2>最近功率趨勢</h2><svg class="chart" id="chart" viewBox="0 0 330 145" role="img" aria-label="最近用電功率折線圖"></svg><p class="small" id="updated">尚無更新</p><button id="export" style="margin-top:12px">匯出畫面資料 CSV</button></section>
+    <section class="card"><h2>分路／區域用電排名</h2><p class="small">分路 A 可能跨廚房與浴室，B 可能跨客廳與走道；名稱都尚未依現場配電圖核實，不能把分路等同房間。各分路以 JSON 定義各自示範電壓。</p><div id="zones" aria-live="polite"></div></section>
+    <section class="card"><h2>錯峰使用建議</h2><p class="small">只提供資訊和使用時段建議，不會遙控家電或斷路器。錯開時段通常降低同時尖峰，不保證節省總度數或電費。</p><div id="tips"></div><hr style="border:0;border-top:1px solid var(--line);margin:18px 0"><h2>最近功率趨勢（非完整 24 小時）</h2><svg class="chart" id="chart" viewBox="0 0 330 145" role="img" aria-label="最近用電功率折線圖"></svg><p class="small" id="updated">尚無更新</p><button id="export" style="margin-top:12px">匯出目前資料 CSV</button></section>
   </div>
 </main>
 <footer><strong>下一階段實體開發：</strong>經專業人員安裝的合格分路電力監測器 → 安全隔離的資料介面 → 家庭閘道器 → Wi-Fi → 手機頁面。將來量測與控制應分離，不能把這個示範程式當作電氣安全保護設備。<div class="footlinks"><a href="index.html">原有配電箱互動模擬器</a><a href="mock_panel.json">查看示範 JSON</a><a href="README.md">開發說明</a></div></footer>
 <script>
-'use strict';
-const $ = id=>document.getElementById(id);
-let offline=false, config=null, scene='normal', last=null, currentHistory=[];
-const badge = text=>$('sourceBadge').textContent=text;
-const setStatus=(msg,error=false)=>{$('statusline').textContent=msg;$('statusline').className='statusline'+(error?' error':'');};
-function localData(cfg, scenario){
-  const p=cfg.panel, def=cfg.scenarios.find(s=>s.id===scenario)||cfg.scenarios[0], enabled=new Set(def.enabled), volt=p.voltageV;
-  const zones=p.branches.map(b=>{const ds=cfg.devices.filter(d=>d.branchId===b.id&&enabled.has(d.id));const requestedW=ds.reduce((a,d)=>a+d.watts,0);const limitW=volt*b.ratingA;let watts=requestedW;const deferredDevices=[];if(def.smart && watts>limitW*.8){for(const d of ds.filter(d=>d.priority>1).sort((a,b)=>b.priority-a.priority||b.watts-a.watts)){if(watts<=limitW*.8)break;watts-=d.watts;deferredDevices.push(d.name);}}const ratio=watts/limitW;return{id:b.id,name:b.areaLabel||b.name,branch:b.name,watts,requestedW,deferredDevices,currentA:Math.round(watts/volt*100)/100,limitW,ratio,status:ratio>=1?'over':ratio>=.8?'high':'normal',devices:ds.map(d=>d.name)};});
-  const totalW=zones.reduce((a,z)=>a+z.watts,0);
-  const high=zones.filter(z=>z.ratio>=.8);const recommendations=high.map(z=>({level:z.ratio>=1?'critical':'warning',title:z.name+' 負載偏高',detail:'先錯開同區高功率電器使用時段；所有門檻僅供示範。'}));
-  for(const z of zones){if(z.deferredDevices.length)recommendations.unshift({level:'info',title:z.name+' 示範錯峰安排',detail:'原需求 '+z.requestedW+' W，延後 '+z.deferredDevices.join('、')+'，目前約 '+z.watts+' W。並未實際關閉電器。'});}if(!recommendations.length){let biggest=[...zones].sort((a,b)=>b.watts-a.watts)[0];recommendations.push({level:'info',title:'目前最高用電區域',detail:biggest.name+' 約 '+biggest.watts+' W，尚未超過示範門檻。'});}
-  return{source:'SIMULATED_DATA_ONLY',sourceDescription:'GitHub Pages 靜態 JSON 展示（無連線）',scenario,totalW,zones,recommendations,stale:false,timestamp:new Date().toISOString()};
+ 'use strict';
+const $=id=>document.getElementById(id);
+let offline=false, connected=false, config=null, last=null, currentHistory=[];
+const badge=msg=>{$('sourceBadge').textContent=msg;};
+const setStatus=(message,problem=false)=>{$('statusline').textContent=message;$('statusline').className='statusline'+(problem?' error':'');};
+const formatW=x=>x==null?'—':Math.round(x).toLocaleString('zh-TW');
+function localData(cfg,scenario){
+ const p=cfg.panel, def=cfg.scenarios.find(x=>x.id===scenario)||cfg.scenarios[0], chosen=new Set(def.enabled);
+ const zones=p.branches.map(b=>{
+   const volt=Number(b.voltageV||p.voltageV),pf=Number(b.powerFactorAssumed||p.powerFactorAssumed||1);
+   const ds=cfg.devices.filter(d=>d.branchId===b.id&&chosen.has(d.id));
+   let watts=ds.reduce((sum,d)=>sum+d.watts,0);const requestedW=watts,limitW=volt*pf*b.ratingA,deferredDevices=[];
+   if(def.smart && watts>limitW*.8){for(const d of ds.filter(d=>d.priority>1).sort((a,b)=>b.priority-a.priority||b.watts-a.watts)){if(watts<=limitW*.8)break;watts-=d.watts;deferredDevices.push(d.name)}}
+   const ratio=watts/limitW;
+   return {id:b.id,name:b.areaLabel||b.name,branch:b.name,voltageV:volt,pfAssumed:pf,mappingVerified:false,watts,requestedW,deferredDevices,currentA:watts/(volt*pf),limitW,ratio,status:ratio>=1?'over':ratio>=.8?'high':'normal',devices:ds.map(x=>x.name)};
+ });
+ const totalW=zones.reduce((sum,z)=>sum+z.watts,0);
+ const recommendations=[];
+ for(const z of zones){if(z.deferredDevices.length)recommendations.push({level:'info',title:z.name+' 錯峰示範',detail:'延後：'+z.deferredDevices.join('、')+'。負載 '+z.requestedW+' W → '+z.watts+' W；這不會自動減少總用電量。'});
+   if(z.ratio>=.8)recommendations.push({level:z.ratio>=1?'critical':'warning',title:z.name+' 自訂示範門檻',detail:'建議先調整同時用電時段；不是電箱跳脫預測。'});
+ }
+ if(!recommendations.length){const z=[...zones].sort((a,b)=>b.watts-a.watts)[0];recommendations.push({level:'info',title:'目前最高負載分路',detail:z.name+' 約 '+z.watts+' W。分路不代表單一房間。'});}
+ return{source:'SIMULATED_DATA_ONLY',sourceDescription:'GitHub Pages／手動離線 JSON 展示',scenario,totalW,zones,recommendations,stale:false,timestamp:new Date().toISOString(),energySinceStartKWh:null,integratedSeconds:0,mappingVerified:false};
 }
-function chart(history){const svg=$('chart');while(svg.firstChild)svg.removeChild(svg.firstChild);const ns='http://www.w3.org/2000/svg';const data=(history||[]).slice(-35);if(!data.length)return;const ys=data.map(x=>Number(x.totalW)||0),max=Math.max(100,...ys)*1.1;const path=ys.map((y,i)=>(i?'L':'M')+(16+i*297/Math.max(1,ys.length-1)).toFixed(1)+','+(119-y/max*100).toFixed(1)).join(' ');let line=document.createElementNS(ns,'path');line.setAttribute('d',path);line.setAttribute('fill','none');line.setAttribute('stroke','#6ce6bb');line.setAttribute('stroke-width','3');line.setAttribute('stroke-linejoin','round');svg.appendChild(line);for(let [x,y,t] of [[10,14,Math.round(max)+' W'],[12,137,'較早'],[274,137,'現在']]){let el=document.createElementNS(ns,'text');el.setAttribute('x',x);el.setAttribute('y',y);el.setAttribute('class','axis');el.textContent=t;svg.appendChild(el);}}
-function render(data,history){last=data;currentHistory=history||[];$('totalW').textContent=Math.round(data.totalW).toLocaleString('zh-TW');const ordered=[...data.zones].sort((a,b)=>b.watts-a.watts);$('topZone').textContent=ordered.length?'分路 '+ordered[0].id:'—';$('topZoneDetail').textContent=ordered.length?ordered[0].name+'｜'+Math.round(ordered[0].watts)+' W':'';$('alerts').textContent=ordered.filter(z=>z.status!=='normal').length;
-  const area=$('zones');area.replaceChildren();for(const z of ordered){const card=document.createElement('article');card.className='zone '+z.status;const heading=document.createElement('div');heading.className='zone-head';const name=document.createElement('strong');name.textContent='分路 '+z.id+'｜'+z.name;const label=document.createElement('span');label.className='zone-badge';label.textContent=z.status==='over'?'示範超限':z.status==='high'?'偏高':'一般';heading.append(name,label);const bar=document.createElement('div');bar.className='bar';const fill=document.createElement('div');fill.style.width=Math.min(100,Math.round(z.ratio*100))+'%';bar.append(fill);const metrics=document.createElement('div');metrics.className='zone-kpi';const left=document.createElement('span');left.textContent=Math.round(z.watts)+' W · '+z.currentA.toFixed(2)+' A（估算）';const right=document.createElement('span');right.textContent=Math.round(z.ratio*100)+'%';metrics.append(left,right);const hint=document.createElement('div');hint.className='zone-sub';hint.textContent='門檻 '+Math.round(z.limitW)+' W（示範）'+(z.requestedW>z.watts?'｜原需求 '+Math.round(z.requestedW)+' W':'')+(z.devices?.length?'｜'+z.devices.join('、'):'');card.append(heading,bar,metrics,hint);area.append(card);}
-  const tips=$('tips');tips.replaceChildren();for(const r of data.recommendations){const e=document.createElement('div');e.className='tip '+r.level;const title=document.createElement('b');title.textContent=r.title;const description=document.createElement('p');description.textContent=r.detail;e.append(title,description);tips.append(e);}
-  if(data.stale){badge('資料過期／來源待核對');}else if(data.source==='SIMULATED_DATA_ONLY'){badge('模擬資料 · 非實測');}else{badge('外部 JSON · 未驗證');}
-  $('updated').textContent='本頁更新 '+new Date().toLocaleTimeString('zh-TW')+'｜來源：'+data.sourceDescription+(data.stale?'｜資料可能過期':'');chart(currentHistory);
+function chart(history){
+ const svg=$('chart');svg.replaceChildren();const ns='http://www.w3.org/2000/svg';const data=(history||[]).filter(x=>x.totalW!=null&&!x.stale).slice(-35);if(!data.length)return;
+ const ys=data.map(x=>Number(x.totalW)||0),max=Math.max(100,...ys)*1.1;
+ const path=ys.map((y,i)=>(i?'L':'M')+(16+i*297/Math.max(1,ys.length-1)).toFixed(1)+','+(119-y/max*100).toFixed(1)).join(' ');
+ const line=document.createElementNS(ns,'path');line.setAttribute('d',path);line.setAttribute('fill','none');line.setAttribute('stroke','#6ce6bb');line.setAttribute('stroke-width','3');svg.append(line);
+ for(const [x,y,t] of [[10,14,Math.round(max)+' W'],[12,137,'較早'],[275,137,'最新']]){const el=document.createElementNS(ns,'text');el.setAttribute('x',x);el.setAttribute('y',y);el.setAttribute('class','axis');el.textContent=t;svg.append(el)}
 }
-async function fallback(){offline=true;config=await fetch('./mock_panel.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('無法讀取 mock_panel.json');return r.json();});setStatus('離線展示：已讀取 mock_panel.json。此頁沒有接電箱，也沒有經 Wi-Fi 讀取電表。');scene=$('scenario').value;const x=localData(config,scene);render(x,[{totalW:x.totalW}]);}
-async function connect(){const pin=$('pin').value.trim();if(pin){try{sessionStorage.setItem('power_lab_demo_pin',pin);}catch{}}try{const r=await fetch('./api/status',{headers:{'X-Demo-Pin':pin},cache:'no-store'});if(r.status===401){offline=false;setStatus('此電腦有啟動 Wi-Fi 閘道器，請輸入終端機顯示的 6 位示範碼。',true);badge('連線需要示範碼');return;}if(!r.ok||!r.headers.get('Content-Type')?.includes('json'))throw Error('no API');const data=await r.json();offline=false;const rh=await fetch('./api/history',{headers:{'X-Demo-Pin':pin},cache:'no-store'});const hist=rh.ok?(await rh.json()).items:[];setStatus('已連接到同一 Wi-Fi 的本機示範閘道器。每 5 秒更新一次；此頁不提供真實斷電控制。');render(data,hist);
-  if(data.scenario && ['normal','overload','smart','mixed'].includes(data.scenario))$('scenario').value=data.scenario;
-}catch(e){try{await fallback();}catch(error){setStatus('無法連線，且示範 JSON 也無法載入。請檢查 gateway.py 與檔案位置。',true);badge('連線失敗');}}}
+function render(data,history){
+ last=data;currentHistory=history||[];
+ const missing=data.totalW==null||!Array.isArray(data.zones)||!data.zones.length;
+ $('totalW').textContent=missing?'—':formatW(data.totalW);
+ const ordered=missing?[]:[...data.zones].sort((a,b)=>b.watts-a.watts);
+ $('topZone').textContent=ordered.length?'分路 '+ordered[0].id:'—';
+ $('topZoneDetail').textContent=ordered.length?ordered[0].name+'｜'+formatW(ordered[0].watts)+' W':'沒有有效分路資料';
+ $('alerts').textContent=ordered.length&&!data.stale?ordered.filter(z=>z.status!=='normal').length:'—';
+ $('energy').textContent=data.energySinceStartKWh==null?'—':Number(data.energySinceStartKWh).toFixed(5);
+ $('energyNote').textContent=data.energySinceStartKWh==null?'離線模式沒有即時積分數據':`僅計入連續有效樣本 ${(Number(data.integratedSeconds)||0).toFixed(0)} 秒；非月用電量`;
+ const area=$('zones');area.replaceChildren();
+ if(!ordered.length){const e=document.createElement('p');e.className='error';e.textContent='來源沒有可用資料。請檢查 Wi-Fi、外部 JSON 及更新時間。';area.append(e)}
+ for(const z of ordered){const card=document.createElement('article');card.className='zone '+z.status;const heading=document.createElement('div');heading.className='zone-head';const name=document.createElement('strong');name.textContent='分路 '+z.id+'｜'+z.name;const flag=document.createElement('span');flag.className='zone-badge';flag.textContent=data.stale?'資料過期':z.status==='over'?'示範超限':z.status==='high'?'偏高':'一般';heading.append(name,flag);
+  const bar=document.createElement('div');bar.className='bar';const fill=document.createElement('div');fill.style.width=Math.min(100,Math.max(0,Math.round(z.ratio*100)))+'%';bar.append(fill);
+  const metrics=document.createElement('div');metrics.className='zone-kpi';const left=document.createElement('span');left.textContent=formatW(z.watts)+' W · '+Number(z.currentA).toFixed(2)+' A（僅推估）';const right=document.createElement('span');right.textContent=Math.round(z.ratio*100)+'%';metrics.append(left,right);
+  const hint=document.createElement('div');hint.className='zone-sub';hint.textContent='示範電壓 '+z.voltageV+' V / PF '+z.pfAssumed+'｜示範容量 '+formatW(z.limitW)+' W｜區域尚未實地核對'+(z.requestedW>z.watts?'｜原需求 '+formatW(z.requestedW)+' W':'');
+  card.append(heading,bar,metrics,hint);area.append(card);
+ }
+ const tips=$('tips');tips.replaceChildren();for(const r of (data.recommendations||[])){const e=document.createElement('div');e.className='tip '+r.level;const title=document.createElement('b');title.textContent=r.title;const info=document.createElement('p');info.textContent=r.detail;e.append(title,info);tips.append(e)}
+ if(data.source==='EXTERNAL_UNAVAILABLE')badge('外部資料不可用 · 非即時');
+ else if(data.stale)badge('資料過期 · 請勿據此判斷');
+ else if(data.source==='SIMULATED_DATA_ONLY')badge('模擬資料 · 非實測');
+ else badge('未驗證外部 JSON · 非認證電表');
+ $('updated').textContent='頁面時間 '+new Date().toLocaleTimeString('zh-TW')+'｜'+(data.sourceDescription||'未知來源')+(data.sourceTimestamp?'｜來源時間 '+data.sourceTimestamp:'')+(data.stale?'｜資料不可靠':'');
+ chart(currentHistory);
+}
+async function fallback(){
+ connected=false;offline=true;
+ config=await fetch('./mock_panel.json',{cache:'no-store'}).then(r=>{if(!r.ok)throw Error('找不到 mock_panel.json');return r.json()});
+ if(config.source!=='SIMULATED_DATA_ONLY')throw Error('示範 JSON 來源標記不正確');
+ setStatus('離線 JSON 模式：只展示虛構情境，沒有 Wi-Fi 電表或電箱連線。');
+ const data=localData(config,$('scenario').value);render(data,[{totalW:data.totalW}]);
+ $('scenario').disabled=false;
+}
+function networkError(message){
+ connected=false;offline=false;badge('Wi-Fi 未連線 / 資料不可用');
+ setStatus(message+'。未自動切換成虛構正常用電；請重新連線或手動選擇離線示範。',true);
+ render({source:'EXTERNAL_UNAVAILABLE',sourceDescription:'Wi-Fi 連線中斷／驗證失敗',stale:true,totalW:null,zones:[],recommendations:[{level:'critical',title:'無即時讀值',detail:'請勿把前次數據當作目前用電。'}],energySinceStartKWh:null},[]);
+}
+async function connect(){
+ if(location.hostname.endsWith('.github.io')){try{await fallback()}catch(e){networkError(e.message)}return}
+ const pin=$('pin').value.trim();if(!/^\d{6}$/.test(pin)){networkError('請輸入本次啟動顯示的 6 位示範碼');return}
+ try{
+   const res=await fetch('./api/status',{headers:{'X-Demo-Pin':pin},cache:'no-store'});
+   if(res.status===401||res.status===429){networkError('示範碼錯誤或驗證次數過多');return}
+   if(!res.ok||!res.headers.get('Content-Type')?.includes('json'))throw Error('找不到 Wi-Fi 閘道器資料 API');
+   const data=await res.json();
+   const rh=await fetch('./api/history',{headers:{'X-Demo-Pin':pin},cache:'no-store'});
+   const history=rh.ok?(await rh.json()).items:[];
+   connected=true;offline=false;
+   try{sessionStorage.setItem('power_lab_demo_pin',pin)}catch{}
+   setStatus(data.stale?'Wi-Fi 已連接，但資料過期或無效。請檢查外部來源。':'Wi-Fi 已連到示範閘道器，每 5 秒更新一次；此頁不控制電箱。',!!data.stale);
+   render(data,history);
+   if(['normal','overload','smart','mixed'].includes(data.scenario))$('scenario').value=data.scenario;
+   $('scenario').disabled=data.source!=='SIMULATED_DATA_ONLY';
+ }catch(e){networkError('Wi-Fi 連線失敗：'+e.message)}
+}
 $('connect').addEventListener('click',connect);
-$('scenario').addEventListener('change',async()=>{const id=$('scenario').value;scene=id;if(offline){const data=localData(config,id);render(data,[{totalW:data.totalW}]);return;}const pin=$('pin').value.trim();try{const res=await fetch('./api/demo/scenario',{method:'POST',headers:{'Content-Type':'application/json','X-Demo-Pin':pin},body:JSON.stringify({scenario:id})});if(!res.ok)throw Error('情境切換未成功，外部資料模式不可切換');await connect();}catch(e){setStatus(e.message,true);}});
-$('export').addEventListener('click',()=>{if(!last)return;const head=['timestamp','source','zone','area','watts','estimatedA','demoLimitW'];const lines=[head];for(const z of last.zones)lines.push([last.timestamp,last.source,z.id,z.name,z.watts,z.currentA,z.limitW]);const csv='\ufeff'+lines.map(row=>row.map(value=>'"'+String(value).replaceAll('"','""')+'"').join(',')).join('\r\n');const u=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=u;a.download='powerlab-zones-demo.csv';a.click();setTimeout(()=>URL.revokeObjectURL(u),500);});
-try{$('pin').value=sessionStorage.getItem('power_lab_demo_pin')||'';}catch{}connect();setInterval(()=>{if(!offline&&$('pin').value.trim())connect();},5000);
+$('demo').addEventListener('click',()=>fallback().catch(e=>networkError('離線資料讀取失敗：'+e.message)));
+$('scenario').addEventListener('change',async()=>{
+ const id=$('scenario').value;
+ if(offline){const data=localData(config,id);render(data,[{totalW:data.totalW}]);return}
+ if(!connected){setStatus('尚未連線，請先輸入示範碼並連線，或切換離線模式。',true);return}
+ try{const res=await fetch('./api/demo/scenario',{method:'POST',headers:{'Content-Type':'application/json','X-Demo-Pin':$('pin').value.trim()},body:JSON.stringify({scenario:id})});if(!res.ok)throw Error('情境切換未成功（外部資料模式不可切換）');await connect()}catch(e){setStatus(e.message,true)}
+});
+$('export').addEventListener('click',()=>{
+ if(!last||last.totalW==null){setStatus('目前沒有有效資料可匯出。',true);return}
+ const lines=[['timestamp','source','stale','branch','unverified_area','watt','estimated_A','branch_voltage_V','demo_limit_W','session_energy_kWh']];
+ for(const z of last.zones)lines.push([last.timestamp,last.source,last.stale,z.id,z.name,z.watts,z.currentA,z.voltageV,z.limitW,last.energyByBranchKWh?.[z.id]??'']);
+ const csv='\ufeff'+lines.map(row=>row.map(x=>'"'+String(x).replaceAll('"','""').replace(/^([=+@-])/,"'$1")+'"').join(',')).join('\r\n');
+ const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='powerlab-branch-readings.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),700);
+});
+try{$('pin').value=sessionStorage.getItem('power_lab_demo_pin')||''}catch{}
+if(location.hostname.endsWith('.github.io'))fallback().catch(e=>networkError('靜態 JSON 無法載入：'+e.message));
+else if($('pin').value.trim())connect();
+else{badge('尚未連線');setStatus('請先啟動 gateway.py，輸入示範碼；也可按「切換離線 JSON 示範」。')}
+setInterval(()=>{if(connected)connect()},5000);
+
 </script>
 </body>
 </html>

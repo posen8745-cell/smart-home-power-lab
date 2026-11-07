@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""Wi-Fi LAN demo server for the smart-home power lab.
+"""Classroom-only Wi-Fi power dashboard. Never connects to or switches mains.
 
-SAFETY: Never connects to mains, a distribution board, a breaker, or a relay.
-All default readings are simulated. No physical control endpoint exists.
+Default values are fictitious. External JSON is UNVERIFIED and can never be
+silently replaced by a convincing simulated 'healthy' reading after an error.
 """
 from __future__ import annotations
 
 import argparse
-from collections import deque
-import csv
+from collections import deque, defaultdict
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import io
 import json
 from pathlib import Path
 import secrets
@@ -21,8 +19,11 @@ import time
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
-ALLOWED = {"/": "monitor.html", "/monitor.html": "monitor.html", "/index.html": "index.html", "/mock_panel.json": "mock_panel.json"}
+ALLOWED = {"/": "monitor.html", "/monitor.html": "monitor.html", "/index.html": "index.html", "/mock_panel.json": "mock_panel.json", "/README.md": "README.md", "/PRODUCT_PLAN.md": "PRODUCT_PLAN.md"}
 SCENARIOS = {"normal", "overload", "smart", "mixed"}
+SAMPLE_SECONDS = 5
+MAX_GAP_SECONDS = 15
+SOURCE_MAX_AGE_SECONDS = 120
 
 
 def utc_now():
@@ -31,128 +32,167 @@ def utc_now():
 
 def load_panel(path=ROOT / "mock_panel.json"):
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    assert data.get("source") == "SIMULATED_DATA_ONLY", "Only simulation configuration is supported"
+    if data.get("source") != "SIMULATED_DATA_ONLY" or not isinstance(data.get("panel", {}).get("branches"), list):
+        raise ValueError("invalid simulation configuration")
     return data
 
 
-def recommendations(zones, total_w, main_limit, devices_by_branch):
+def _branch_electrical(panel, branch):
+    v = float(branch.get("voltageV", panel.get("voltageV", 110)))
+    pf = float(branch.get("powerFactorAssumed", panel.get("powerFactorAssumed", 1)))
+    amps = float(branch["ratingA"])
+    if not (0 < v <= 240 and 0 < pf <= 1 and 0 < amps <= 200):
+        raise ValueError("invalid electrical example")
+    return v, pf, amps
+
+
+def _reading_age(timestamp):
+    if not isinstance(timestamp, str):
+        return None
+    try:
+        d = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            return None
+        return (datetime.now(timezone.utc) - d.astimezone(timezone.utc)).total_seconds()
+    except (ValueError, OverflowError):
+        return None
+
+
+def recommendations(zones, total_w, main_limit, devices_by_branch, quality_ok=True):
+    if not quality_ok:
+        return [{"level": "critical", "title": "量測資料不可用或過期", "detail": "請檢查資料來源與更新時間，不要將舊讀值當作即時負載。"}]
     notes = []
-    for zone in sorted(zones, key=lambda item: item["ratio"], reverse=True):
-        if zone["ratio"] >= 1:
-            needed = max(0, zone["watts"] - zone["limitW"] * 0.8)
-            alternatives = sorted((x for x in devices_by_branch.get(zone["id"], []) if x["on"] and x["priority"] > 1), key=lambda x: (-x["priority"], -x["watts"]))
-            choices, freed = [], 0
-            for device in alternatives:
-                choices.append(device["name"])
-                freed += device["watts"]
-                if freed >= needed:
+    for z in sorted(zones, key=lambda row: row["ratio"], reverse=True):
+        if z["ratio"] >= 1:
+            choices = sorted((x for x in devices_by_branch.get(z["id"], []) if x.get("on") and x.get("priority", 1) > 1), key=lambda d: (-d["priority"], -d["watts"]))
+            to_free = max(0, z["watts"] - z["limitW"] * .8)
+            chosen, freed = [], 0
+            for d in choices:
+                chosen.append(d["name"])
+                freed += d["watts"]
+                if freed >= to_free:
                     break
-            action = f"建議錯峰使用：{'、'.join(choices)}。" if choices and freed >= needed else "請降低此區同時用電需求並交由專業人員確認。"
-            notes.append({"level": "critical", "title": f"{zone['name']} 超出示範門檻", "detail": action + " 這不是實際斷路器動作預測。"})
-        elif zone["ratio"] >= .8:
-            notes.append({"level": "warning", "title": f"{zone['name']} 負載偏高", "detail": "建議將可延後使用的高功率電器改在其他時段使用；這是自訂示範門檻。"})
-    if total_w > main_limit:
-        notes.insert(0, {"level": "critical", "title": "示範總負載偏高", "detail": "建議錯開不同區域的高功率電器，降低同時使用的尖峰需求。"})
-    if not notes:
-        busiest = max(zones, key=lambda item: item["watts"], default=None)
-        if busiest:
-            notes.append({"level": "info", "title": "目前最高用電區域", "detail": f"{busiest['name']} 約 {busiest['watts']:.0f} W；目前均未超過自訂示範門檻。"})
+            if freed < to_free:
+                detail = "同時負載高，建議由住戶先檢視非必要電器；不可依軟體自行改動電箱。"
+            else:
+                detail = f"建議錯峰使用：將{'、'.join(chosen)}移到不同時段（非遠端斷電）。"
+            notes.append({"level": "critical", "title": f"{z['name']} 超過示範門檻", "detail": detail + " 此門檻不是實際斷路器跳脫預測。"})
+        elif z["ratio"] >= .8:
+            notes.append({"level": "warning", "title": f"{z['name']} 負載偏高", "detail": "可考慮錯開高功率電器的同時使用時間；不代表電費一定會降低。"})
+    if main_limit is not None and total_w > main_limit:
+        notes.insert(0, {"level": "critical", "title": "示範總負載偏高", "detail": "建議檢查各分路用電，同時使用尖峰不等於耗電總度數。"})
+    if not notes and zones:
+        b = max(zones, key=lambda z: z["watts"])
+        notes.append({"level": "info", "title": "目前用電最多的分路", "detail": f"{b['name']} 約 {b['watts']:.0f} W（{b['branch']}）；此為瞬時功率，不是累計度數。"})
     return notes
+
+
+def unavailable_status(config, reason):
+    return {
+        "timestamp": utc_now(), "sourceTimestamp": None, "source": "EXTERNAL_UNAVAILABLE",
+        "sourceDescription": "外部資料不可用；不以虛構資料冒充即時讀值", "stale": True,
+        "readingAgeSeconds": None, "scenario": "external-file", "panel": config["panel"]["name"],
+        "mappingVerified": False, "mainLimitW": None, "totalW": None,
+        "totalAEstimated": None, "zones": [], "recommendations": recommendations([], 0, None, {}, quality_ok=False),
+        "error": str(reason)[:180],
+        "safetyNote": "資料中斷時不顯示綠色安全狀態。本頁不是電氣保護器。",
+    }
 
 
 def compute_status(config, scenario="normal", telemetry=None):
     panel = config["panel"]
-    v = float(panel["voltageV"])
-    main_limit = v * float(panel["mainBreaker"]["ratingA"])
-    by_branch = {b["id"]: [] for b in panel["branches"]}
+    branch_defs = panel["branches"]
+    ids = [b["id"] for b in branch_defs]
+    if len(ids) != len(set(ids)) or not ids:
+        raise ValueError("duplicate or empty branch identifiers")
+    by_branch = {bid: [] for bid in ids}
+    source_ts = utc_now()
+    stale = False
+    age = 0
+    deferred = {}
     if telemetry is None:
         scen = next((s for s in config["scenarios"] if s["id"] == scenario), None)
-        if scen is None:
+        if not scen:
             raise ValueError("unknown scenario")
         enabled = set(scen["enabled"])
         for dev in config["devices"]:
+            if dev["branchId"] not in by_branch:
+                raise ValueError("device assigned to unknown branch")
             x = dict(dev)
             x["on"] = x["id"] in enabled
             by_branch[x["branchId"]].append(x)
-        power_by_branch = {key: sum(d["watts"] for d in devs if d["on"]) for key,devs in by_branch.items()}
-        requested_by_branch = dict(power_by_branch)
-        deferred = {}
+        requested = {bid: sum(d["watts"] for d in ds if d["on"]) for bid, ds in by_branch.items()}
+        powers = dict(requested)
         if scen.get("smart"):
-            # Demo-only *voluntary* time shifting; no switches, relays or breakers are controlled.
-            for branch in panel["branches"]:
+            # Schedule-only demo: adjusts hypothetical concurrent loads, not physical devices.
+            for branch in branch_defs:
                 bid = branch["id"]
-                target = v * float(branch["ratingA"]) * 0.8
-                if power_by_branch[bid] <= target:
+                v, pf, rating = _branch_electrical(panel, branch)
+                target = v * pf * rating * .8
+                if powers[bid] <= target:
                     continue
-                candidates = sorted(
-                    (d for d in by_branch[bid] if d["on"] and d["priority"] > 1),
-                    key=lambda d: (-d["priority"], -d["watts"]),
-                )
-                for device in candidates:
-                    if power_by_branch[bid] <= target:
+                for d in sorted((x for x in by_branch[bid] if x["on"] and x["priority"] > 1), key=lambda x: (-x["priority"], -x["watts"])):
+                    if powers[bid] <= target:
                         break
-                    power_by_branch[bid] -= device["watts"]
-                    deferred.setdefault(bid, []).append(device["name"])
+                    powers[bid] -= d["watts"]
+                    deferred.setdefault(bid, []).append(d["name"])
         mode = "SIMULATED_DATA_ONLY"
-        description = "JSON 示範情境，非實測電流"
-        source_ts = utc_now()
-        stale = False
+        desc = "虛構 JSON 情境（不是電箱讀值）"
     else:
         if not isinstance(telemetry, dict) or not isinstance(telemetry.get("zones"), dict):
-            raise ValueError("telemetry needs zones object")
+            raise ValueError("external JSON requires zones object")
         vals = telemetry["zones"]
-        power_by_branch = {}
-        requested_by_branch = None
-        deferred = {}
-        for branch in panel["branches"]:
-            value = vals.get(branch["id"], 0)
-            if not isinstance(value, (int, float)) or isinstance(value, bool) or not (0 <= value < 100000):
-                raise ValueError("invalid zone watts")
-            power_by_branch[branch["id"]] = float(value)
+        if any(bid not in vals for bid in ids):
+            raise ValueError("external data missing one or more branches")
+        powers = {}
+        for bid in ids:
+            value = vals[bid]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not (0 <= value < 100000):
+                raise ValueError("invalid external W value")
+            powers[bid] = float(value)
+        requested = dict(powers)
         mode = "EXTERNAL_UNVERIFIED"
-        description = "外部 JSON 輸入（未驗證量測來源）"
-        source_ts = telemetry.get("timestamp") or "未提供來源時間"
-        stale = True
-        if telemetry.get("timestamp"):
-            try:
-                t = datetime.fromisoformat(telemetry["timestamp"].replace("Z", "+00:00"))
-                stale = abs((datetime.now(timezone.utc) - t.astimezone(timezone.utc)).total_seconds()) > 120
-            except (ValueError, TypeError):
-                stale = True
+        desc = "外部 JSON（來源與計量精度未驗證）"
+        source_ts = telemetry.get("timestamp")
+        age = _reading_age(source_ts)
+        stale = age is None or age < -10 or age > SOURCE_MAX_AGE_SECONDS
     zones = []
-    for branch in panel["branches"]:
+    for branch in branch_defs:
         bid = branch["id"]
-        watts = float(power_by_branch[bid])
-        limit_w = v * float(branch["ratingA"])
-        ratio = watts / limit_w if limit_w > 0 else 0
+        v, pf, amp = _branch_electrical(panel, branch)
+        # v*PF*I is a simplified classroom model, not a breaker protection curve.
+        max_w = v * pf * amp
+        watts = float(powers[bid])
+        ratio = watts / max_w
         zones.append({
-            "id": bid,
-            "name": branch.get("areaLabel") or branch["name"],
-            "branch": branch["name"],
-            "watts": round(watts, 2),
-            "requestedW": round(requested_by_branch[bid] if requested_by_branch is not None else watts, 2),
+            "id": bid, "name": branch.get("areaLabel") or branch["name"],
+            "branch": branch["name"], "voltageV": v, "pfAssumed": pf,
+            "mappingVerified": bool(branch.get("mappingVerified", False)),
+            "watts": round(watts, 2), "requestedW": round(requested[bid], 2),
             "deferredDevices": deferred.get(bid, []),
-            "currentA": round(watts / v, 2),  # simplified demo estimate, NOT measured A
-            "limitW": round(limit_w, 2),
-            "ratio": round(ratio, 4),
+            "currentA": round(watts / (v * pf), 2), "currentIsEstimated": True,
+            "limitW": round(max_w, 2), "ratio": round(ratio, 4),
             "status": "over" if ratio >= 1 else "high" if ratio >= .8 else "normal",
-            "devices": [x["name"] for x in by_branch[bid] if x["on"]] if telemetry is None else [],
+            "devices": [d["name"] for d in by_branch[bid] if d["on"]] if telemetry is None else [],
         })
-    total = sum(x["watts"] for x in zones)
-    notes = recommendations(zones, total, main_limit, by_branch)
-    for zone in zones:
-        if zone["deferredDevices"]:
-            notes.insert(0, {"level":"info", "title":f"{zone['name']} 示範錯峰安排", "detail":
-                f"原需求 {zone['requestedW']:.0f} W，改為 {zone['watts']:.0f} W；建議稍後再使用：{'、'.join(zone['deferredDevices'])}。本網站沒有真的關閉設備。"})
+    total_w = sum(z["watts"] for z in zones)
+    voltages = {z["voltageV"] for z in zones}
+    pfs = {z["pfAssumed"] for z in zones}
+    # Total current is NOT additive between mixed-voltage circuits.
+    main_w = round(float(panel["mainBreaker"]["ratingA"]) * next(iter(voltages)) * next(iter(pfs)), 2) if len(voltages) == 1 and len(pfs) == 1 else None
+    main_a = round(total_w / next(iter(voltages)) / next(iter(pfs)), 2) if main_w is not None else None
+    notes = recommendations(zones, total_w, main_w, by_branch, quality_ok=not stale)
+    for z in zones:
+        if z["deferredDevices"]:
+            notes.insert(0, {"level": "info", "title": f"{z['name']} 示範錯峰安排", "detail": f"原同時需求 {z['requestedW']:.0f} W，改為 {z['watts']:.0f} W；稍後使用：{'、'.join(z['deferredDevices'])}。同樣使用時間下，總度數不會因錯峰自動下降。"})
     return {
-        "timestamp": utc_now(), "sourceTimestamp": source_ts,
-        "source": mode, "sourceDescription": description, "stale": stale,
-        "scenario": scenario if telemetry is None else "external-file",
-        "panel": panel["name"], "mainLimitW": round(main_limit, 2),
-        "totalW": round(total, 2), "totalAEstimated": round(total/v, 2),
-        "zones": zones,
-        "recommendations": notes,
-        "safetyNote": "教學展示／用電分配建議，不是實體過電流保護或遠端斷電；實際配電請交由專業人員。",
+        "timestamp": utc_now(), "sourceTimestamp": source_ts, "source": mode,
+        "sourceDescription": desc, "stale": stale, "readingAgeSeconds": round(age, 1) if age is not None else None,
+        "scenario": scenario if telemetry is None else "external-file", "panel": panel["name"],
+        "mappingVerified": bool(panel.get("mappingVerified", False)),
+        "mainLimitW": main_w, "totalW": round(total_w, 2), "totalAEstimated": main_a,
+        "zones": zones, "recommendations": notes,
+        "safetyNote": "僅為資料展示與用電安排建議；非即時電氣安全或遠端跳脫系統。",
     }
 
 
@@ -164,23 +204,41 @@ class State:
         self.telemetry_path = telemetry_path
         self.history = deque(maxlen=720)
         self.latest = None
+        self.energy = defaultdict(float)
+        self.session_seconds = 0.0
+        self.last_mono = None
+        self.previous = None
 
-    def sample(self):
+    def sample(self, now_mono=None):
+        now_mono = time.monotonic() if now_mono is None else now_mono
         with self.lock:
-            external = None
-            if self.telemetry_path is not None:
-                try:
-                    external = json.loads(self.telemetry_path.read_text(encoding="utf-8"))
-                    status = compute_status(self.config, telemetry=external)
-                except (OSError, ValueError, TypeError, KeyError) as exc:
-                    status = compute_status(self.config, scenario=self.scenario)
-                    status["source"] = "INPUT_ERROR_FALLBACK_SIMULATED"
-                    status["sourceDescription"] = "外部 JSON 無法讀取；已改用虛構資料（"+type(exc).__name__+"）"
-                    status["stale"] = True
+            if self.telemetry_path is None:
+                status = compute_status(self.config, self.scenario)
             else:
-                status = compute_status(self.config, scenario=self.scenario)
+                try:
+                    raw = json.loads(self.telemetry_path.read_text(encoding="utf-8"))
+                    status = compute_status(self.config, telemetry=raw)
+                except (OSError, ValueError, TypeError, KeyError) as exc:
+                    status = unavailable_status(self.config, type(exc).__name__)
+            # Integrate the previous valid reading over a bounded elapsed interval.
+            # Missing samples, stale input or scenario switches are not silently filled.
+            if (self.previous is not None and self.last_mono is not None
+                    and 0 < now_mono - self.last_mono <= MAX_GAP_SECONDS
+                    and not self.previous["stale"] and not status["stale"]
+                    and status["source"] == self.previous["source"]
+                    and status["scenario"] == self.previous["scenario"]):
+                dt = now_mono - self.last_mono
+                self.session_seconds += dt
+                for z in self.previous["zones"]:
+                    self.energy[z["id"]] += z["watts"] * dt / 3_600_000
+            status["energySinceStartKWh"] = round(sum(self.energy.values()), 7)
+            status["energyByBranchKWh"] = {b["id"]: round(self.energy[b["id"]], 7) for b in self.config["panel"]["branches"]}
+            status["integratedSeconds"] = round(self.session_seconds, 1)
+            status["energyNote"] = "只積分本次程式執行期間的連續有效資料；非完整日／月度數，也不能核對帳單。"
             self.latest = status
-            self.history.append({"timestamp": status["timestamp"], "totalW": status["totalW"], **{z["id"]:z["watts"] for z in status["zones"]}})
+            self.history.append({"timestamp":status["timestamp"], "totalW":status["totalW"], "source":status["source"], "stale":status["stale"], "energySinceStartKWh":status["energySinceStartKWh"]})
+            self.previous = status
+            self.last_mono = now_mono
             return status
 
     def change_scenario(self, scenario):
@@ -194,94 +252,104 @@ class State:
 
 def local_ip():
     try:
-        with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:
-            sock.connect(("192.0.2.1", 1))  # no traffic sent
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("192.0.2.1", 1))  # no packet sent
             return sock.getsockname()[0]
     except OSError:
-        return "你的電腦局域網 IP"
+        return "此電腦區域網 IP"
 
 
 def make_handler(state, pin):
+    failures = defaultdict(deque)
+    guard = threading.Lock()
     class Handler(BaseHTTPRequestHandler):
-        server_version = "PowerLabDemo/0.3"
+        server_version = "PowerLabDemo/0.4"
         def log_message(self, fmt, *args):
-            print("[LAN] "+fmt%args)
-        def _send(self, body, typ, status=200, extra=None):
+            print("[LAN] " + fmt % args)
+        def _send(self, body, typ, status=200):
             self.send_response(status)
-            self.send_header("Content-Type",typ)
-            self.send_header("Content-Length",str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Referrer-Policy", "no-referrer")
-            if extra:
-                for key,val in extra.items(): self.send_header(key,val)
+            for key, val in {
+                "Content-Type":typ, "Content-Length":str(len(body)), "Cache-Control":"no-store",
+                "X-Content-Type-Options":"nosniff", "Referrer-Policy":"no-referrer",
+                "X-Frame-Options":"DENY", "Content-Security-Policy":"frame-ancestors 'none'",
+            }.items(): self.send_header(key,val)
             self.end_headers()
             self.wfile.write(body)
         def _json(self, data, code=200):
-            self._send(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), "application/json; charset=utf-8",code)
+            self._send(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), "application/json; charset=utf-8", code)
         def _authorized(self):
-            # Comparison is constant-time. This is a classroom pairing code, not production authentication.
-            if not secrets.compare_digest(self.headers.get("X-Demo-Pin", ""), pin):
-                self._json({"error":"請在手機頁面輸入啟動時顯示的 6 位示範碼"},401)
-                return False
-            return True
+            ip = self.client_address[0]
+            with guard:
+                seq = failures[ip]
+                while seq and time.monotonic()-seq[0] > 60:
+                    seq.popleft()
+                if len(seq) >= 10:
+                    self._json({"error":"示範碼錯誤過多，請稍後再試"},429)
+                    return False
+            ok = secrets.compare_digest(self.headers.get("X-Demo-Pin", ""), pin)
+            if not ok:
+                with guard: failures[ip].append(time.monotonic())
+                self._json({"error":"請輸入本次啟動的 6 位示範碼"},401)
+            else:
+                with guard: failures[ip].clear()
+            return ok
         def do_GET(self):
             path = urlparse(self.path).path
             if path == "/api/status":
                 if self._authorized():
-                    with state.lock: d=state.latest
-                    self._json(d)
+                    with state.lock: data=state.latest
+                    self._json(data)
             elif path == "/api/history":
                 if self._authorized():
-                    with state.lock: d=list(state.history)
-                    self._json({"items":d})
+                    with state.lock: data=list(state.history)
+                    self._json({"items":data})
             elif path in ALLOWED:
-                name = ALLOWED[path]
-                typ = "text/html; charset=utf-8" if name.endswith(".html") else "application/json; charset=utf-8"
+                name=ALLOWED[path]
+                typ="text/html; charset=utf-8" if name.endswith(".html") else "application/json; charset=utf-8" if name.endswith(".json") else "text/markdown; charset=utf-8"
                 self._send((ROOT/name).read_bytes(),typ)
             else:
                 self._json({"error":"not found"},404)
         def do_POST(self):
             if urlparse(self.path).path != "/api/demo/scenario":
-                self._json({"error":"not found"},404); return
+                self._json({"error":"not found"},404)
+                return
             if not self._authorized(): return
             try:
-                ln = int(self.headers.get("Content-Length","0"))
-                if ln<2 or ln>256: raise ValueError("bad size")
-                data = json.loads(self.rfile.read(ln))
-                scene = data["scenario"]
-                if not isinstance(scene,str): raise ValueError("bad value")
-                if not state.change_scenario(scene):
-                    self._json({"error":"只允許切換虛構情境；外部資料模式不能切換"},400);return
-                self._json({"ok":True,"scenario":scene})
-            except (KeyError, ValueError, TypeError, json.JSONDecodeError):
+                size=int(self.headers.get("Content-Length","0"))
+                if not 2<=size<=256: raise ValueError("size")
+                content=json.loads(self.rfile.read(size))
+                if not isinstance(content,dict) or not isinstance(content.get("scenario"),str): raise ValueError("input")
+                if not state.change_scenario(content["scenario"]):
+                    self._json({"error":"僅能切換虛構情境；外部資料模式禁止切換"},400)
+                    return
+                self._json({"ok":True, "scenario":content["scenario"]})
+            except (ValueError, KeyError, TypeError):
                 self._json({"error":"invalid request"},400)
     return Handler
 
 
 def main():
-    parser=argparse.ArgumentParser(description="Wi-Fi read-only home power monitoring classroom prototype")
-    parser.add_argument("--port",type=int,default=8765)
-    parser.add_argument("--host",default="0.0.0.0",help="LAN binding; do not port-forward")
-    parser.add_argument("--telemetry",type=Path,help="optional local JSON data adapter (unverified, no direct mains)")
-    parser.add_argument("--pin",help=argparse.SUPPRESS)
-    args=parser.parse_args()
+    p=argparse.ArgumentParser(description="Wi-Fi LAN classroom demo, no physical switching")
+    p.add_argument("--port",type=int,default=8765)
+    p.add_argument("--host",default="0.0.0.0",help="LAN binding; never port-forward")
+    p.add_argument("--telemetry",type=Path,help="unverified external JSON data file")
+    p.add_argument("--pin",help=argparse.SUPPRESS)
+    args=p.parse_args()
     pin=args.pin or f"{secrets.randbelow(900000)+100000}"
     state=State(load_panel(),args.telemetry)
     state.sample()
     stop=threading.Event()
     def worker():
-        while not stop.wait(5): state.sample()
-    threading.Thread(target=worker,daemon=True).start()
-    ip=local_ip()
-    print("\n=== 家庭用電 Wi-Fi 示範原型｜僅模擬讀值／不控制電箱 ===")
-    print(f"電腦瀏覽： http://127.0.0.1:{args.port}/monitor.html")
-    print(f"同一 Wi-Fi 的手機： http://{ip}:{args.port}/monitor.html")
-    print(f"本次示範碼（手機輸入）： {pin}")
-    print("請勿轉發連結或做路由器 Port Forwarding；不是正式資安或電氣安全產品。\n")
+        while not stop.wait(SAMPLE_SECONDS): state.sample()
+    threading.Thread(target=worker, daemon=True).start()
+    print("\n=== PowerLab v4｜教學模擬與用電分配；無電箱連線、無跳脫控制 ===")
+    print(f"電腦： http://127.0.0.1:{args.port}/monitor.html")
+    print(f"手機同 Wi-Fi： http://{local_ip()}:{args.port}/monitor.html")
+    print(f"啟動示範碼： {pin}")
+    print("不可向網際網路開放埠口；此 HTTP+短碼僅限可信任區域網示範。\n")
     server=ThreadingHTTPServer((args.host,args.port),make_handler(state,pin))
-    try:server.serve_forever()
-    except KeyboardInterrupt:print("\n已停止")
-    finally:stop.set();server.server_close()
+    try: server.serve_forever()
+    except KeyboardInterrupt: print("\n已停止")
+    finally: stop.set();server.server_close()
 
-if __name__=="__main__": main()
+if __name__ == "__main__": main()

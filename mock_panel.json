@@ -1,7 +1,7 @@
 {
-  "schemaVersion": "1.1",
+  "schemaVersion": "1.2",
   "source": "SIMULATED_DATA_ONLY",
-  "description": "高中電機自主學習｜虛構配電箱與示範分路。區域名稱可自訂，並非真實住宅配電圖。",
+  "description": "高中電機自主學習原型：虛構分路、標示共用區域、各回路額定電壓與示範門檻。非真實施工圖，非現地量測。",
   "panel": {
     "id": "DB-DEMO-001",
     "name": "住宅用電模擬配電箱",
@@ -17,23 +17,37 @@
         "name": "高功率家電",
         "ratingA": 15,
         "detail": "電鍋、吹風機",
-        "areaLabel": "高功率設備區（示範）"
+        "areaLabel": "廚房／浴室共用（虛構分路）",
+        "voltageV": 110,
+        "powerFactorAssumed": 1.0,
+        "mappingVerified": false,
+        "measurement": "DEMO_ESTIMATE"
       },
       {
         "id": "B",
         "name": "照明與風扇",
         "ratingA": 10,
         "detail": "LED照明、電風扇",
-        "areaLabel": "客廳照明區（示範）"
+        "areaLabel": "客廳／走道照明（虛構分路）",
+        "voltageV": 110,
+        "powerFactorAssumed": 1.0,
+        "mappingVerified": false,
+        "measurement": "DEMO_ESTIMATE"
       },
       {
         "id": "C",
         "name": "資訊與除濕",
         "ratingA": 15,
         "detail": "電腦、除濕機",
-        "areaLabel": "書房除濕區（示範）"
+        "areaLabel": "書房／臥室設備（虛構分路）",
+        "voltageV": 110,
+        "powerFactorAssumed": 1.0,
+        "mappingVerified": false,
+        "measurement": "DEMO_ESTIMATE"
       }
-    ]
+    ],
+    "mappingVerified": false,
+    "mappingNote": "虛構的分路標籤；A可能同時供應多區域，不可當作房間的實際量測。"
   },
   "devices": [
     {
@@ -154,5 +168,20 @@
       "computedSuppliedCurrentA": 6.36,
       "expectedState": "LOAD_SHED"
     }
-  ]
+  ],
+  "examples": {
+    "powerAndEnergy": {
+      "exampleW": 1200,
+      "durationMinutes": 30,
+      "estimatedKWh": 0.6,
+      "note": "持續1200W達30分鐘，約0.6kWh；錯峰不會自動減少這筆電能。"
+    },
+    "voltageSupport": {
+      "supportedBranchVoltageV": [
+        110,
+        220
+      ],
+      "note": "各分路可定義電壓；實際市電量測須由專業人員使用符合規範的計量設備。"
+    }
+  }
 }
